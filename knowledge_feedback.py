@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from ai_extensions.core import WorkHubAPI
+from contextlib import contextmanager
 
 ROOT = Path(__file__).resolve().parent
 
@@ -33,8 +34,15 @@ class FeedbackStore:
                 submitted_at TEXT NOT NULL, reviewed_at TEXT,
                 reviewer TEXT)''')
 
+    @contextmanager
     def _db(self):
-        return sqlite3.connect(self.db_path, timeout=15)
+        db = sqlite3.connect(self.db_path, timeout=15)
+
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def propose(self, title: str, body: str, source: str) -> str:
         title, body, source = title.strip(), body.strip(), source.strip()
