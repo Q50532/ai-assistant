@@ -1,0 +1,20 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.env
+logs/
+data/
+approved_docs/*.txt
+knowledge_index.json
+knowledge_vectors.npy
+tickets_export.json
+ticket_documents.json
+ticket3.json
+ticket3.txt
+@'
+.env.*
+!.env.example
+*.pem
+*.key
+'@ | Add-Content .gitignore
