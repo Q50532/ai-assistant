@@ -12,9 +12,9 @@ tickets_export.json
 ticket_documents.json
 ticket3.json
 ticket3.txt
-@'
+
 .env.*
 !.env.example
 *.pem
 *.key
-'@ | Add-Content .gitignore
+ Add-Content .gitignore
