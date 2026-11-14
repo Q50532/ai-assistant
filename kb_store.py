@@ -38,6 +38,12 @@ def load_index():
     return texts, sources, vectors, allowed
 
 
+@lru_cache(maxsize=1)
+def get_embedder():
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+
+
 def search_kb(query: str, top_k: int = 5, *, embedder=None):
     if not 1 <= len(query.strip()) <= 500:
         raise ValueError('Query must contain between 1 and 500 characters')
@@ -47,8 +53,7 @@ def search_kb(query: str, top_k: int = 5, *, embedder=None):
     if not allowed:
         return []
     if embedder is None:
-        from sentence_transformers import SentenceTransformer
-        embedder = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+        embedder = get_embedder()
     import numpy as np
     q = np.asarray(embedder.encode(query)).reshape(-1)
     embeddings = np.asarray(vectors[allowed])

@@ -132,7 +132,7 @@ class EvidenceAgent:
     Do not pass Ticket chunks from a shared RAG index as public knowledge.
     """
     ALLOWED = frozenset({'search_knowledge', 'get_ticket', 'similar_tickets',
-                         'suggest_resolution', 'suggest_priority'})
+                         'suggest_resolution', 'suggest_priority', 'triage_ticket'})
 
     def __init__(self, workhub: Transport,
                  search_cb: Callable[[str, int], Sequence[Mapping[str, Any]]],
@@ -156,6 +156,8 @@ class EvidenceAgent:
                 result = self.similar_tickets(str(params.get('query','')), username, password)
             elif tool == 'suggest_priority':
                 result = self.suggest_priority(str(params.get('description','')))
+            elif tool == 'triage_ticket':
+                result = self.triage_ticket(params.get('ticket_id'), username, password)
             else:
                 result = self.suggest_resolution(str(params.get('query','')), username, password)
             return result
@@ -244,6 +246,74 @@ class EvidenceAgent:
                 'message': ('参考以下授权证据拟定排查步骤。证据不足时不要猜测，不自动修改 Ticket。'
                             if evidence else 'No authorized supporting evidence found.'),
                 'evidence':evidence}
+
+
+    def triage_ticket(self, ticket_id: Any, username: str, password: str) -> dict[str, Any]:
+        """Read-only, multi-step Ticket triage, scoped to the requesting WorkHub user.
+
+        The first step MUST be an authorized live Ticket lookup; a 403/404 stops
+        the workflow before retrieving any KB or other Ticket information.
+        This returns evidence and a draft priority only, not an AI-written fix
+        or a claim that the Ticket has been updated.
+        """
+        number = self.ticket_id(ticket_id)
+        # Fail closed on 401/403/404, with WorkHub as the single ACL authority.
+        primary = self.run_tool('get_ticket', {'ticket_id': number}, username, password)
+        ticket = primary.get('ticket')
+        if (not isinstance(ticket, dict)
+                or isinstance(ticket.get('id'), bool)
+                or ticket.get('id') != number):
+            raise ToolError(502, 'WorkHub returned an invalid Ticket')
+
+        title = str(ticket.get('title') or '').strip()
+        description = str(ticket.get('description') or '').strip()
+        query = (' '.join(p for p in (title, description) if p) or f'Ticket {number}')[:500]
+
+        knowledge = self.run_tool('search_knowledge', {'query': query}, username, password)
+        similar = self.run_tool('similar_tickets', {'query': query}, username, password)
+        priority = self.run_tool('suggest_priority',
+                                 {'description': description or title or query},
+                                 username, password)
+
+        # Keep only sources that were actually returned by authorized tools.
+        # Remove the current Ticket from the similar list (not a comparison).
+        primary_citation = f'[TICKET:{number}]'
+        used = {primary_citation}
+        sources = []
+        for item in primary.get('evidence', []):
+            if item.get('citation') == primary_citation:
+                sources.append(item)
+        if len(sources) != 1:
+            raise ToolError(502, 'Ticket evidence was not returned')
+        for item in knowledge.get('evidence', [])[:3] + similar.get('evidence', [])[:5]:
+            cite = item.get('citation')
+            if cite in used or not isinstance(cite, str):
+                continue
+            if not CitationGate.verify(f'Evidence {cite}', [Evidence(
+                    str(item.get('source_type','')), str(item.get('source_id','')),
+                    str(item.get('excerpt','')))]):
+                continue
+            used.add(cite)
+            sources.append(item)
+
+        status = 'EVIDENCE_READY' if len(sources) > 1 else 'INSUFFICIENT_EVIDENCE'
+        return {
+            'tool': 'triage_ticket',
+            'status': 'DRAFT_ONLY',
+            'evidence_status': status,
+            'ticket': {k: ticket.get(k) for k in
+                       ('id', 'title', 'description', 'status', 'priority', 'category', 'version')},
+            'suggested_priority': priority['suggested_priority'],
+            'priority_reason': priority['reason'],
+            'evidence': sources,
+            'tool_trace': ['get_ticket', 'search_knowledge', 'similar_tickets',
+                           'suggest_priority'],
+            'human_review_required': True,
+            'automatic_update': False,
+            'limitations': ('Priority is a keyword-based draft. Search covers the first '
+                            '100 authorized Tickets; KB citations establish provenance, '
+                            'not factual correctness. No Ticket was modified.'),
+        }
 
     def suggest_priority(self, description: str) -> dict[str, Any]:
         if not 1 <= len(description.strip()) <= 5000:

@@ -40,7 +40,7 @@ def login(session: requests.Session):
 
 
 def registered_tools(agent: EvidenceAgent, username: str, password: str, collected: list[Evidence],
-                     called: list[str]):
+                     called: list[str], *, include_triage: bool = False):
     """Gemini receives only function signatures, docstrings and non-secret tool outputs."""
     def invoke(name: str, data: dict):
         called.append(name)
@@ -74,11 +74,18 @@ def registered_tools(agent: EvidenceAgent, username: str, password: str, collect
         """Return a rule-based, human-review-only priority suggestion without writing Tickets."""
         return invoke('suggest_priority', {'description': description})
 
-    return [search_knowledge, get_ticket, similar_tickets, suggest_resolution, suggest_priority]
+    def triage_ticket(ticket_id: int) -> dict:
+        """Produce a read-only, evidence-backed multi-tool triage report for an authorized Ticket ID."""
+        return invoke('triage_ticket', {'ticket_id': ticket_id})
+
+    tools = [search_knowledge, get_ticket, similar_tickets, suggest_resolution, suggest_priority]
+    if include_triage:
+        tools.append(triage_ticket)
+    return tools
 
 
 def answer_is_supported(answer: str, evidence: list[Evidence], called: list[str]) -> bool:
-    evidence_tools = {'search_knowledge', 'get_ticket', 'similar_tickets', 'suggest_resolution'}
+    evidence_tools = {'search_knowledge', 'get_ticket', 'similar_tickets', 'suggest_resolution', 'triage_ticket'}
     if any(name in evidence_tools for name in called):
         return CitationGate.verify(answer, evidence)
     # Do not confuse deterministic priority heuristics with sourced RAG evidence.
@@ -109,7 +116,7 @@ def main():
             evidence: list[Evidence] = []
             called: list[str] = []
             try:
-                tools = registered_tools(agent, user['username'], password, evidence, called)
+                tools = registered_tools(agent, user['username'], password, evidence, called, include_triage=True)
                 response = client.models.generate_content(
                     model=MODEL, contents=question,
                     config=types.GenerateContentConfig(
